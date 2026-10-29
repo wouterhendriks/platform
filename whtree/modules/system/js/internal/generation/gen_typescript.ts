@@ -114,6 +114,10 @@ export function getTSPolyfills() {
   return globalPolyfills.map(name => require.resolve(name));
 }
 
+function getTSServiceFiles(modules: string[]) {
+  return modules.filter(module => !whconstant_builtinmodules.includes(module)).map(module => `${backendConfig.dataRoot}config/ts/${module}/services.ts`);
+}
+
 async function buildTSConfig(node_modules: DataRootItem[]) {
   const tsconfig = {
     extends: backendConfig.installationRoot + "tsconfig.json",
@@ -124,6 +128,7 @@ async function buildTSConfig(node_modules: DataRootItem[]) {
       "**/vendor/**",
       "**/node_modules/**"
     ],
+    files: getTSServiceFiles(Object.keys(backendConfig.module)),
     include: [
       "**/*",
       //activate the Temporal polyfill in the IDEs
@@ -146,7 +151,13 @@ export async function generateTSConfigTextForModule(module: string) {
     throw new Error(`Module '${module}' not found`);
 
   const datarootitems = getDataRootNodeModules();
-  return formatTSConfig(await buildTSConfig(datarootitems));
+  // eslint-disable-next-line @typescript-eslint/no-require-imports -- the generator's validators import our TypeScript helpers
+  const { buildGeneratorContext } = require("./generator") as typeof import("./generator");
+  const context = await buildGeneratorContext(null, false);
+  return formatTSConfig({
+    ...await buildTSConfig(datarootitems),
+    files: getTSServiceFiles([module, ...context.getModuleDependencies(module)])
+  });
 }
 
 async function syncLinks(basepath: string, want: DataRootItem[], { clean = false, verbose = false } = {}) {
@@ -258,10 +269,16 @@ export default [...relaxedConfig, {
      - esbuild might also use it ?
 
     Note that 'wh checkmodule' currently also updates this for the checked module.*/
-  const tsconfigText = formatTSConfig(tsconfig);
+  // eslint-disable-next-line @typescript-eslint/no-require-imports -- the generator's validators import our TypeScript helpers
+  const { buildGeneratorContext } = require("./generator") as typeof import("./generator");
+  const context = await buildGeneratorContext(null, Boolean(options?.verbose));
   for (const [module, config] of Object.entries(backendConfig.module)) {
-    if (!whconstant_builtinmodules.includes(module) && (!options?.modules || options?.modules.includes(module))) { //the builtin ones are handled by a central tsconfig.json
-      await updateFile(config.root + "tsconfig.json", tsconfigText);
+    //A targeted update can change transitive dependencies of other modules too.
+    if (!whconstant_builtinmodules.includes(module)) { //the builtin ones are handled by a central tsconfig.json
+      await updateFile(config.root + "tsconfig.json", formatTSConfig({
+        ...tsconfig,
+        files: getTSServiceFiles([module, ...context.getModuleDependencies(module)])
+      }));
     }
   }
 
